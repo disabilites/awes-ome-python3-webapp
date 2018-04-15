@@ -4,51 +4,56 @@ import logging,asyncio
 
 import aiomysql
 
-def log(sql,args=()):
-    logging.info('SQL: %s'% sql)
 
-@asyncio.coroutine
-def create_pool(loop,**kw):
+def log(sql, args=()):
+    logging.info('SQL: %s' % sql)
+
+
+async def create_pool(loop,**kw):
     logging.info('create database connection pool...')
     global __pool
-    __pool = yield  from aiomysql.create_pool(
-        host=kw.get('host','localhost'),
-        port=kw.get('port','3306'),
+    __pool = await aiomysql.create_pool(
+        host=kw.get('host', 'localhost'),
+        port=kw.get('port', 3306),
         user=kw['user'],
         password=kw['password'],
         db=kw['db'],
-        charset=kw.get('charset','utf8'),
-        autocommit=kw.get('autocommit',True),
-        maxsize=kw.get('maxsize',10),
-        minsize=kw.get('minsize',1),
+        charset=kw.get('charset', 'utf8'),
+        autocommit=kw.get('autocommit', True),
+        maxsize=kw.get('maxsize', 10),
+        minsize=kw.get('minsize', 1),
         loop=loop
     )
 
-@asyncio.coroutine
-def select(sql,args,size=None):
-    log(sql,args)
+
+async def select(sql, args, size=None):
+    log(sql, args)
     global __pool
-    with(yield from __pool) as conn:
-        cur = yield from conn.cursor(aiomysql.DictCursor)
-        yield from  cur.execute(sql.replace('?','%s'),args or ())
-        if size:
-            rs = yield from cur.fetchmany(size)
-        else:
-            rs = yield from cur.fetchall()
-        yield from cur.close()
-        logging.info('rows returned:%s'% len(rs))
+    async with __pool.get() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await  cur.execute(sql.replace('?','%s'),args or ())
+            if size:
+                rs = await cur.fetchmany(size)
+            else:
+                rs = await cur.fetchall()
+        logging.info('rows returned:%s' % len(rs))
         return rs
 
-@asyncio.coroutine
-def execute(sql,args,autocommit=True):
+
+async def execute(sql, args, autocommit=True):
     log(sql)
-    with(yield from __pool) as conn:
+    async with __pool.get() as conn:
+        if not autocommit:
+            await conn.begin()
         try:
-            cur = yield from conn.cursor()
-            yield from cur.execute(sql.replace('?','%s'),args)
-            affected = cur.rowcount
-            yield from cur.close()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(sql.replace('?', '%s'), args)
+                affected = cur.rowcount
+            if not autocommit:
+                await conn.commit()
         except BaseException as e:
+            if not autocommit:
+                await conn.rollback()
             raise
         return affected
 
@@ -77,7 +82,7 @@ class StringField(Field):
 class BooleanField(Field):
 
     def __init__(self,name=None,default=False):
-        super().__init__(name,ddl,primary_key,default)
+        super().__init__(name,'boolean',False,default)
 
 class IntegerField(Field):
 
@@ -102,33 +107,33 @@ class ModelMetaclass(type):
         tableNmae = attrs.get('__table__',None) or name
         logging.info('found model：%s (table：%s)' % (name,tableNmae))
         mappings = dict()
-        field = []
-        primarykey = None
-        for k,v in attrs.items():
-            if isinstance(v,Field):
-                logging.info('  found mapping：%s ==> %s' % (k,v))
+        fields = []
+        primaryKey = None
+        for k, v in attrs.items():
+            if isinstance(v, Field):
+                logging.info('  found mapping: %s ==> %s' % (k, v))
                 mappings[k] = v
                 if v.primary_key:
-                    if primarykey:
-                        raise StandarError('Duplicate primary key for field：%s' % k)
-                    primarykey = k
+                    # 找到主键:
+                    if primaryKey:
+                        raise StandarError('Duplicate primary key for field: %s' % k)
+                    primaryKey = k
                 else:
                     fields.append(k)
-
-        if not primarykey:
-            raise StandarErroe('Primary key not found.')
+        if not primaryKey:
+            raise StandarError('Primary key not found.')
         for k in mappings.keys():
             attrs.pop(k)
-        escaped.fields = list(map(lambda f:'‘%s’' % f,field))
+        escaped_fields = list(map(lambda f: '`%s`' % f, fields))
         attrs['__mappings__'] = mappings #保存属性和列的映射关系
         attrs['__tableName__'] = tableNmae #表名
-        attrs['__primary_key'] = primarykey #主键属性名
-        attrs['__fileds__'] = fields #除主键外的属性名
-        attrs['__select__'] = 'select `%s`,%s from `%s`' % (primarykey,','.join(escaped_fileds),tableNmae)
-        attrs['__insert__'] = 'insert into `%s` (%s,`%s`) values (%s)' % (tableNmae,','.join(escaped_fileds),primarykey,create_args_string(len(escaped_fields) + 1))
-        attrs['__update__'] = 'update `%s` set %s where `%s`=? ' % (tableNmae,','.join(map(lambda  f: '`%s` = ?' % (mappings.get(f).name or f),fields)),primarykey)
-        attrs['__delete__'] = 'delete from `%s` where `%s` = ?' % (tableNmae,primarykey)
-        return  type.__new__(cls,name,bases,attrs)
+        attrs['__primary_key__'] = primaryKey #主键属性名
+        attrs['__fields__'] = fields #除主键外的属性名
+        attrs['__select__'] = 'select `%s`,%s from `%s`' % (primaryKey, ','.join(escaped_fields), tableNmae)
+        attrs['__insert__'] = 'insert into `%s` (%s,`%s`) values (%s)' % (tableNmae , ','.join(escaped_fields), primaryKey, create_args_string(len(escaped_fields) + 1))
+        attrs['__update__'] = 'update `%s` set %s where `%s`=? ' % (tableNmae, ','.join(map(lambda f: '`%s` = ?' % (mappings.get(f).name or f),fields)), primaryKey)
+        attrs['__delete__'] = 'delete from `%s` where `%s` = ?' % (tableNmae, primaryKey)
+        return type.__new__(cls, name, bases, attrs)
 
 class Model(dict,metaclass=ModelMetaclass):
 
@@ -136,10 +141,10 @@ class Model(dict,metaclass=ModelMetaclass):
         super(Model, self).__init__(**kw)
 
     def __getattr__(self, key):
-         try:
-             return self[key]
-         except KeyError:
-             raise AttributeError(r"'Model' object has no attribute '%s'" % key)
+        try:
+            return self[key]
+        except KeyError:
+            raise AttributeError(r"'Model' object has no attribute '%s'" % key)
 
     def __setattr__(self, key, value):
         self[key] = value
@@ -152,6 +157,16 @@ class Model(dict,metaclass=ModelMetaclass):
                 value = field.default() if callable(field.default) else field.default
                 logging.debug('using default value for %s：%s' % (key,str(value)))
                 setattr(self,key,value)
+        return value
+
+    def getValueOrDefault(self, key):
+        value = getattr(self, key, None)
+        if value is None:
+            field = self.__mappings__[key]
+            if field.default is not None:
+                value = field.default() if callable(field.default) else field.default
+                logging.debug('using default value for %s: %s' % (key, str(value)))
+                setattr(self, key, value)
         return value
 
     @classmethod
@@ -202,9 +217,16 @@ class Model(dict,metaclass=ModelMetaclass):
         return cls(**rs[0])
 
     async def save(self):
-        args = list(map(self.getValueOrDefault,self.__field__))
+        args = list(map(self.getValueOrDefault, self.__fields__))
         args.append(self.getValueOrDefault(self.__primary_key__))
-        rows = await execute(self.__insert__,args)
+        rows = await execute(self.__insert__, args)
+        if rows != 1:
+            logging.warn('failed to insert record: affected rows: %s' % rows)
+
+    async def update(self):
+        args = list(map(self.getValue, self.__fields__))
+        args.append(self.getValue(self.__primary_key__))
+        rows = await execute(self.__update__, args)
         if rows != 1:
             logging.warn('failed to update by primary key: affected rows: %s' % rows)
 
