@@ -9,9 +9,10 @@ from jinja2 import Environment, FileSystemLoader
 import orm
 from coroweb import add_routes, add_static
 
+#初始化jinja2，以便其他函数使用jinja2模板
 def init_jinja2(app, **kw):
     logging.info('init jinja2...')
-    options = dict(
+    options = dict(         #get()方法返回指定键的值
         autoescape = kw.get('autoescape', True),
         block_start_string = kw.get('block_start_string', '{%'),
         block_end_string = kw.get('block_end_string', '%}'),
@@ -20,6 +21,11 @@ def init_jinja2(app, **kw):
         auto_reload = kw.get('auto_reload', True)
     )
     path = kw.get('path', None)
+    '''
+    os.path.dirname(__file__)返回当前执行脚本的执行路径（用相对路径和绝对路径执行有区别）
+    os.path.abspath(__file__)返回当前脚本的绝对路径
+    os.path.join()将多个路径组合后返回
+    '''
     if path is None:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
     logging.info('set jinja2 template path: %s' % path)
