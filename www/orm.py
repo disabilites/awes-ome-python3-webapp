@@ -97,7 +97,7 @@ class FloatField(Field):
 class TextField(Field):
 
     def __init__(self,name=None,default=None):
-        super().__init__(name,'text',False,default)
+        super().__init__(name, 'text',False,default)
 
 class ModelMetaclass(type):
 
@@ -205,7 +205,7 @@ class Model(dict,metaclass=ModelMetaclass):
             sql.append(where)
         rs = await select(''.join(sql),args,1)
         if len(rs) == 0:
-            return  None
+            return None
         return rs[0]['_num_']
 
     @classmethod
