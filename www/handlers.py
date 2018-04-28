@@ -1,11 +1,11 @@
 import re, time, json, logging, hashlib, base64, asyncio
 
-#import markdown2
+import markdown2
 
 from aiohttp import web
 
 from coroweb import get, post
-from apis import APIValueError, APIResourceNotFoundError
+from apis import Page, APIValueError, APIResourceNotFoundError
 
 from models import User, Comment, Blog, next_id
 from config import configs
@@ -80,6 +80,19 @@ def index(request):
         '__template__': 'blogs.html',
         'blogs': blogs,
         '__user__': request.__user__
+    }
+
+@get('/blogs/{id}')
+async def get_blog(id):
+    blog = await Blog.find(id)
+    comments = await Comment.findAll('blog_id=?', [id], orderBy='created_at desc')
+    for c in comments:
+        c.html_content = text2html(c.content)
+    blog.html_content = markdown2.markdown(blog.content)
+    return {
+        '__template__': 'blog.html',
+        'blog': blog,
+        'comments': comments
     }
 
 @get('/register')
@@ -168,7 +181,7 @@ async def api_get_blog(*, id):
     return blog
 
 @post('/api/blogs')
-def api_create_blog(request, *, name, summary, content):
+async def api_create_blog(request, *, name, summary, content):
     check_admin(request)
     if not name or not name.strip():
         raise APIValueError('name', 'name cannot be empty.')
@@ -177,5 +190,22 @@ def api_create_blog(request, *, name, summary, content):
     if not content or not content.strip():
         raise APIValueError('content', 'content cannot be empty.')
     blog = Blog(user_id=request.__user__.id, user_name=request.__user__.name, user_image=request.__user__.image, name=name.strip(), summary=summary.strip(), content=content.strip())
-    yield from blog.save()
+    await blog.save()
     return blog
+
+@get('/api/blogs')
+async def api_blogs(*, page='1'):
+    page_index = get_page_index(page)
+    num = await Blog.findNumber('count(id)')
+    p = Page(num, page_index)
+    if num == 0:
+        return dict(page=p, blogs=())
+    blogs = await Blog.findAll(orderBy='created_at desc', limit=(p.offset, p.limit))
+    return dict(page=p, blogs=blogs)
+
+@get('/manage/blogs')
+def manage_blogs(*, page='1'):
+    return {
+        '__template__': 'manage_blogs.html',
+        'page_index': get_page_index(page)
+    }
